@@ -1,0 +1,121 @@
+================================================================================
+LEASE-AXI LIVE PROOF TRANSCRIPT
+Pool: agy/default/gemini (Concurrency Cap: 1)
+Date: 2026-11-03T20:16:26Z
+================================================================================
+
+--- SCENARIO 1: ATOMIC ADMISSION & DEFERRAL (EXIT 75) ---
+
+[Step 1] Agent Alpha requests lease on agy/default/gemini (cap=1, ttl=30s):
+{
+  "granted": true,
+  "deferred": false,
+  "lease": {
+    "id": "lease_804d16159fc4441e",
+    "pool": "agy/default/gemini",
+    "holder": "agent-worker-alpha",
+    "cap": 1,
+    "acquiredAt": "2026-11-03T20:16:27.025Z",
+    "expiresAt": "2026-11-03T20:16:57.025Z",
+    "ttlSeconds": 30
+  }
+}
+>>> Agent Alpha admitted! Granted Lease ID: lease_804d16159fc4441e
+
+[Step 2] Agent Beta attempts to acquire slot on the same pool:
+$ lease-axi grant --pool agy/default/gemini --cap 1 --ttl 30s --holder agent-worker-beta
+deferred:
+  pool: agy/default/gemini
+  cap: 1
+  active: 1
+  reason: pool capacity reached (1/1)
+holders[1]{id,holder,expiresAt,remainingSeconds}:
+  lease_804d16159fc4441e,agent-worker-alpha,"2026-11-03T20:16:57.025Z",30
+>>> Process exit code: 75
+>>> VERIFIED: Pool capacity enforced. Agent Beta deferred with standard exit code 75 (EX_TEMPFAIL)!
+
+[Step 3] Inspect pool status with active lease:
+$ lease-axi status --pool agy/default/gemini
+pools[1]{pool,active,cap}:
+  agy/default/gemini,1,1
+leases[1]{id,pool,holder,cap,acquiredAt,expiresAt,ttlSeconds,remainingSeconds}:
+  lease_804d16159fc4441e,agy/default/gemini,agent-worker-alpha,1,"2026-11-03T20:16:27.025Z","2026-11-03T20:16:57.025Z",30,30
+
+[Step 4] Agent Alpha completes and releases its lease:
+$ lease-axi release lease_804d16159fc4441e
+released:
+  id: lease_804d16159fc4441e
+  pool: agy/default/gemini
+  holder: agent-worker-alpha
+
+[Step 5] Agent Beta retries and is admitted immediately:
+$ lease-axi grant --pool agy/default/gemini --cap 1 --ttl 30s --holder agent-worker-beta
+lease:
+  id: lease_21b0edaa3c96420c
+  pool: agy/default/gemini
+  holder: agent-worker-beta
+  cap: 1
+  acquiredAt: "2026-11-03T20:16:27.280Z"
+  expiresAt: "2026-11-03T20:16:57.280Z"
+  ttl: 30s
+>>> Agent Beta admitted with Lease ID: lease_21b0edaa3c96420c
+
+
+--- SCENARIO 2: BLOCKING WAIT (--wait) ---
+
+[Step 1] Agent Alpha acquires slot with 30s TTL:
+>>> Agent Alpha holding slot: lease_294679ea9aa143ea
+
+[Step 2] Agent Beta runs with '--wait 10s' in background, while Alpha holds slot:
+>>> Agent Beta is blocking and waiting...
+    [Agent Beta] Starting wait for pool slot...
+>>> Agent Alpha releases lease after 2 seconds...
+released:
+  id: lease_294679ea9aa143ea
+  pool: agy/default/gemini
+  holder: agent-worker-alpha
+    [Agent Beta] Unblocked and admitted after ~2s!
+    {
+      "granted": true,
+      "deferred": false,
+      "lease": {
+        "id": "lease_e4078785637a4fe5",
+        "pool": "agy/default/gemini",
+        "holder": "agent-worker-beta",
+        "cap": 1,
+        "acquiredAt": "2026-11-03T20:16:29.503Z",
+        "expiresAt": "2026-11-03T20:17:29.503Z",
+        "ttlSeconds": 60
+      }
+    }
+>>> VERIFIED: Second process blocked until first released, then acquired immediately!
+
+--- SCENARIO 3: DEAD HOLDER AUTOMATIC EXPIRY RECLAIM ---
+
+[Step 1] Agent Alpha acquires slot with short 2s TTL, then simulates crash (no release):
+lease:
+  id: lease_35456ca660904676
+  pool: agy/default/gemini
+  holder: crashed-agent
+  cap: 1
+  acquiredAt: "2026-11-03T20:16:29.753Z"
+  expiresAt: "2026-11-03T20:16:31.753Z"
+  ttl: 2s
+>>> Agent crashed-agent exited without cleanup.
+>>> Waiting 2.5s for TTL to elapse...
+
+[Step 2] Agent Beta requests lease on same pool:
+$ lease-axi grant --pool agy/default/gemini --cap 1 --ttl 30s --holder agent-worker-beta
+lease:
+  id: lease_5ea60a0dc374416c
+  pool: agy/default/gemini
+  holder: agent-worker-beta
+  cap: 1
+  acquiredAt: "2026-11-03T20:16:32.323Z"
+  expiresAt: "2026-11-03T20:17:02.323Z"
+  ttl: 30s
+>>> VERIFIED: Expired lease reclaimed at admission time! Agent Beta admitted without human intervention.
+
+================================================================================
+ALL PROOF SCENARIOS COMPLETED SUCCESSFULLY
+================================================================================

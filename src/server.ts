@@ -5,6 +5,10 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+import { AxiError } from "axi-sdk-js";
+import { BUILTIN_CONFIG, type PoolConfig } from "./config.js";
+import { buildPoolsView } from "./pools.js";
+import { type QuotaSource, resolveQuotaSource } from "./quota.js";
 import { FileLeaseStore } from "./store.js";
 import {
   type GrantRequest,
@@ -63,7 +67,17 @@ function sendJson(
   res.end(json);
 }
 
-export function createLeaseServer(store: ILeaseStore): Server {
+export type LeaseServerOptions = {
+  config?: PoolConfig;
+  quota?: QuotaSource;
+};
+
+export function createLeaseServer(
+  store: ILeaseStore,
+  options: LeaseServerOptions = {},
+): Server {
+  const config = options.config ?? BUILTIN_CONFIG;
+  const quota = options.quota ?? resolveQuotaSource();
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
       const url = new URL(
@@ -89,6 +103,12 @@ export function createLeaseServer(store: ILeaseStore): Server {
         const pool = url.searchParams.get("pool") ?? undefined;
         const result = await store.status(pool);
         sendJson(res, 200, result);
+        return;
+      }
+
+      if (method === "GET" && pathname === "/pools") {
+        const status = await store.status();
+        sendJson(res, 200, await buildPoolsView(status, quota, config));
         return;
       }
 
@@ -151,6 +171,10 @@ export function createLeaseServer(store: ILeaseStore): Server {
         message: `Unknown endpoint ${method} ${pathname}`,
       });
     } catch (err) {
+      if (err instanceof AxiError && err.code === "VALIDATION_ERROR") {
+        sendJson(res, 400, { error: err.code, message: err.message });
+        return;
+      }
       sendJson(res, 500, {
         error: "INTERNAL_ERROR",
         message: (err as Error).message,
@@ -164,6 +188,8 @@ export type ServerOptions = {
   port?: number;
   store?: ILeaseStore;
   storePath?: string;
+  config?: PoolConfig;
+  quota?: QuotaSource;
 };
 
 export type RunningServer = {
@@ -181,9 +207,10 @@ export async function startServer(
   const port =
     options.port ??
     (process.env.LEASE_AXI_PORT ? Number(process.env.LEASE_AXI_PORT) : 7117);
-  const store = options.store ?? new FileLeaseStore(options.storePath);
+  const config = options.config ?? BUILTIN_CONFIG;
+  const store = options.store ?? new FileLeaseStore(options.storePath, config);
 
-  const server = createLeaseServer(store);
+  const server = createLeaseServer(store, { config, quota: options.quota });
 
   return new Promise<RunningServer>((resolve, reject) => {
     server.on("error", (err) => {

@@ -4,6 +4,7 @@ import {
   DeferralError,
   grantCommand,
   type LeaseContext,
+  poolsCommand,
   releaseCommand,
   renewCommand,
   serveCommand,
@@ -34,8 +35,8 @@ export const DESCRIPTION =
   "Agent ergonomic pool lease CLI: grant, renew and release concurrency slots with heartbeat expiry";
 
 export const TOP_HELP = `usage: lease-axi <command> [flags]
-commands[5]:
-  grant, renew, release, status (list), serve
+commands[6]:
+  grant, renew, release, status (list), pools, serve
 output:
   Default TOON reports compact agent-ergonomic state. Pass --json for structured JSON output.
   When a pool is at capacity, grant defers the caller and exits with status 75 (EX_TEMPFAIL).
@@ -44,14 +45,17 @@ verbs:
   renew: Heartbeat extends lease TTL
   release: Free an acquired lease slot immediately
   status: Inspect active pools, holder leases, and remaining TTLs (alias: list)
+  pools: Join quota-axi state with pool config and leases; flag idle pools (unstarted or near reset, no lease)
   serve: Run lightweight HTTP authority server for tailnet / cross-machine lease coordination
-flags[9]:
-  --pool <name>, --cap <n>, --ttl <duration>, --holder <id>, --wait <duration>, --retry-interval <duration>, --server <url>, --store <path>, --json
+flags[14]:
+  --pool <name>, --cap <n>, --ttl <duration>, --holder <id>, --wait <duration>, --retry-interval <duration>, --task <text>, --expect-duration <duration>, --expect-size <text>, --config <path>, --quota-file <path>, --server <url>, --store <path>, --json
 examples:
   lease-axi grant --pool agy/default/gemini --cap 1 --ttl 60s
   lease-axi grant --pool agy/default/gemini --cap 1 --wait 30s
   lease-axi renew lease_01h7abc123 --ttl 60s
   lease-axi release lease_01h7abc123
+  lease-axi grant --pool agy/default/argon --holder worker-1 --task "refactor parser" --expect-duration 20m --expect-size medium
+  lease-axi pools
   lease-axi status
   lease-axi status --pool agy/default/gemini
   lease-axi serve --bind 0.0.0.0 --port 7117
@@ -88,6 +92,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
       renew: renewCommand,
       release: releaseCommand,
       status: statusCommand,
+      pools: poolsCommand,
       list: statusCommand,
       serve: serveCommand,
     },

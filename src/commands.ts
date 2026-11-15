@@ -2,14 +2,19 @@ import { AxiError } from "axi-sdk-js";
 import {
   type CommonFlags,
   parseGrantFlags,
+  parsePoolsFlags,
   parseReleaseFlags,
   parseRenewFlags,
   parseServeFlags,
   parseStatusFlags,
 } from "./args.js";
 import { HttpLeaseClient } from "./client.js";
+import { loadPoolConfig } from "./config.js";
+import { buildPoolsView } from "./pools.js";
+import { resolveQuotaSource } from "./quota.js";
 import {
   renderGrant,
+  renderPools,
   renderRelease,
   renderRenew,
   renderStatus,
@@ -38,7 +43,7 @@ export function resolveStore(flags: CommonFlags): ILeaseStore {
   if (flags.server) {
     return new HttpLeaseClient(flags.server);
   }
-  return new FileLeaseStore(flags.store);
+  return new FileLeaseStore(flags.store, loadPoolConfig(flags.config));
 }
 
 export async function grantCommand(args: string[]): Promise<string> {
@@ -51,6 +56,9 @@ export async function grantCommand(args: string[]): Promise<string> {
     holder: flags.holder,
     wait: flags.wait,
     retryInterval: flags.retryInterval,
+    task: flags.task,
+    expectDuration: flags.expectDuration,
+    expectSize: flags.expectSize,
   });
 
   if (result.granted) {
@@ -91,13 +99,31 @@ export async function statusCommand(args: string[]): Promise<string> {
   return renderStatus(result, flags.json);
 }
 
+export async function poolsCommand(args: string[]): Promise<string> {
+  const flags = parsePoolsFlags(args);
+  const store = resolveStore(flags);
+  if (store instanceof HttpLeaseClient) {
+    return renderPools(await store.pools(), flags.json);
+  }
+  const status = await store.status();
+  const result = await buildPoolsView(
+    status,
+    resolveQuotaSource(flags.quotaFile),
+    loadPoolConfig(flags.config),
+  );
+  return renderPools(result, flags.json);
+}
+
 export async function serveCommand(args: string[]): Promise<string> {
   const flags = parseServeFlags(args);
   const storePath = flags.store ?? getDefaultStorePath();
+  const config = loadPoolConfig(flags.config);
   const server = await startServer({
     bind: flags.bind,
     port: flags.port,
     storePath,
+    config,
+    quota: resolveQuotaSource(flags.quotaFile),
   });
 
   const info = {

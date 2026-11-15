@@ -3,6 +3,7 @@ import { AxiError } from "axi-sdk-js";
 export type CommonFlags = {
   server?: string;
   store?: string;
+  config?: string;
   json: boolean;
 };
 
@@ -13,6 +14,13 @@ export type GrantFlags = CommonFlags & {
   holder?: string;
   wait?: string;
   retryInterval?: string;
+  task?: string;
+  expectDuration?: string;
+  expectSize?: string;
+};
+
+export type PoolsFlags = CommonFlags & {
+  quotaFile?: string;
 };
 
 export type RenewFlags = CommonFlags & {
@@ -31,7 +39,28 @@ export type StatusFlags = CommonFlags & {
 export type ServeFlags = CommonFlags & {
   bind: string;
   port: number;
+  quotaFile?: string;
 };
+
+/** Consume `--name value` or `--name=value`; returns the value and new index, or undefined. */
+function takeValue(
+  args: string[],
+  i: number,
+  name: string,
+): { value: string; next: number } | undefined {
+  const arg = args[i];
+  if (arg === name) {
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new AxiError(`Missing value for ${name}`, "VALIDATION_ERROR");
+    }
+    return { value, next: i + 1 };
+  }
+  if (arg.startsWith(`${name}=`)) {
+    return { value: arg.slice(name.length + 1), next: i };
+  }
+  return undefined;
+}
 
 export function parseGrantFlags(args: string[]): GrantFlags {
   let pool = "";
@@ -43,9 +72,27 @@ export function parseGrantFlags(args: string[]): GrantFlags {
   let server: string | undefined = process.env.LEASE_AXI_SERVER;
   let store: string | undefined = process.env.LEASE_AXI_STORE;
   let json = false;
+  let task: string | undefined;
+  let expectDuration: string | undefined;
+  let expectSize: string | undefined;
+  let config: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    const extra =
+      takeValue(args, i, "--task") ??
+      takeValue(args, i, "--expect-duration") ??
+      takeValue(args, i, "--expect-size") ??
+      takeValue(args, i, "--config");
+    if (extra) {
+      const name = arg.split("=")[0];
+      if (name === "--task") task = extra.value;
+      else if (name === "--expect-duration") expectDuration = extra.value;
+      else if (name === "--expect-size") expectSize = extra.value;
+      else config = extra.value;
+      i = extra.next;
+      continue;
+    }
     if (arg === "--pool") {
       pool = args[++i] ?? "";
     } else if (arg.startsWith("--pool=")) {
@@ -120,6 +167,10 @@ export function parseGrantFlags(args: string[]): GrantFlags {
     holder,
     wait,
     retryInterval,
+    task,
+    expectDuration,
+    expectSize,
+    config,
     server,
     store,
     json,
@@ -273,10 +324,20 @@ export function parseServeFlags(args: string[]): ServeFlags {
     ? Number(process.env.LEASE_AXI_PORT)
     : 7117;
   let store: string | undefined = process.env.LEASE_AXI_STORE;
+  let config: string | undefined;
+  let quotaFile: string | undefined;
   let json = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    const hit =
+      takeValue(args, i, "--config") ?? takeValue(args, i, "--quota-file");
+    if (hit) {
+      if (arg.split("=")[0] === "--config") config = hit.value;
+      else quotaFile = hit.value;
+      i = hit.next;
+      continue;
+    }
     if (arg === "--bind") {
       bind = args[++i] ?? bind;
     } else if (arg.startsWith("--bind=")) {
@@ -318,6 +379,43 @@ export function parseServeFlags(args: string[]): ServeFlags {
     bind,
     port,
     store,
+    config,
+    quotaFile,
     json,
   };
+}
+
+export function parsePoolsFlags(args: string[]): PoolsFlags {
+  let server: string | undefined = process.env.LEASE_AXI_SERVER;
+  let store: string | undefined = process.env.LEASE_AXI_STORE;
+  let config: string | undefined;
+  let quotaFile: string | undefined;
+  let json = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const hit =
+      takeValue(args, i, "--server") ??
+      takeValue(args, i, "--store") ??
+      takeValue(args, i, "--config") ??
+      takeValue(args, i, "--quota-file");
+    if (hit) {
+      const name = arg.split("=")[0];
+      if (name === "--server") server = hit.value;
+      else if (name === "--store") store = hit.value;
+      else if (name === "--config") config = hit.value;
+      else quotaFile = hit.value;
+      i = hit.next;
+    } else if (arg === "--json") {
+      json = true;
+    } else {
+      throw new AxiError(
+        `Unknown flag or argument: ${arg}`,
+        "VALIDATION_ERROR",
+        ["Run `lease-axi pools --help` for usage details"],
+      );
+    }
+  }
+
+  return { server, store, config, quotaFile, json };
 }

@@ -20,6 +20,7 @@ Neutral pool lease CLI: grant, renew, and release concurrency slots with heartbe
 | `renew`              | Heartbeat to extend a lease's expiration deadline               | Exit `1` if expired / not found        |
 | `release`            | Free an acquired slot immediately                               | Exit `0` (idempotent)                  |
 | `status` (or `list`) | Inspect active pools, holders, and remaining lease TTLs         | Exit `0`                               |
+| `pools`              | Join quota-axi state, pool config and leases; flag idle pools   | Exit `0`                               |
 | `serve`              | Start HTTP authority service for network / tailnet coordination | Runs until stopped                     |
 
 ---
@@ -128,6 +129,51 @@ leases[1]{id,pool,holder,cap,acquiredAt,expiresAt,ttlSeconds,remainingSeconds}:
   lease_04e76a8dbb124119,agy/default/gemini,agent-worker-1,1,"2026-11-03T12:00:00.000Z","2026-11-03T12:01:00.000Z",60,42
 ```
 
+### 7. Declare expected usage
+
+`grant` accepts a declaration of what the holder is about to do. It is stored on the lease and shown to anyone deferred behind it:
+
+```sh
+lease-axi grant --pool agy/default/argon --holder worker-1 \
+  --task "refactor parser" --expect-duration 20m --expect-size medium
+```
+
+`--expect-duration` is the expected total run time (the lease `--ttl` stays the heartbeat deadline). `--expect-size` is free text (`small`, `~40 files`).
+
+---
+
+## Quota-aware pools
+
+`lease-axi` can name its pools after quota-axi's quota pools, `provider/account/scope` (for example `agy/default/argon`, `agy/default/claude_gpt`, `codex/default/all_models`). `quota-axi` is optional: it is only read by `pools`, and every other verb works without it.
+
+### Pool config
+
+Caps are enforced by the authority from a JSON config (`--config`, `LEASE_AXI_CONFIG`, else `$XDG_CONFIG_HOME/lease-axi/pools.json`). A configured cap overrides any `--cap` a caller passes. Built-in defaults cap `agy`, `codex` and `opencode-go` pools at 1.
+
+```json
+{
+  "providers": { "agy": { "cap": 1 }, "codex": { "cap": 1 } },
+  "pools": { "agy/default/argon": { "cap": 1, "requireTask": true } },
+  "idle": { "nearExpiryMinutes": 60 }
+}
+```
+
+An exact pool rule beats its provider rule. `requireTask` makes `grant` exit 2 unless `--task` is declared. In `serve` mode the server's config is the one that applies.
+
+### The `pools` view
+
+```sh
+lease-axi pools
+lease-axi pools --server http://authority:7117
+```
+
+Each pool shows remaining percent, whether its window has started, when it resets, its cap, and its current holders with their declared task. A config-managed pool with **no lease** is flagged `idle` when:
+
+- `unstarted`: its session window (or its only window) is still at 100% remaining, so the clock has not started; or
+- `near-expiry`: a window that still has unused quota resets within `idle.nearExpiryMinutes` (default 60), weekly windows included.
+
+Exhausted pools are never flagged. Quota comes from `quota-axi --json` (override the binary with `LEASE_AXI_QUOTA_BIN`, or a saved document with `--quota-file` / `LEASE_AXI_QUOTA_FILE`). If quota-axi is missing or fails, `pools` still prints leases and configured pools and sets `quota.available: false` with the error. `lease-axi serve` answers `GET /pools` using its own quota-axi, so every machine sees one table.
+
 ---
 
 ## Authority Modes
@@ -207,19 +253,24 @@ When deferred:
 
 ## Flags Reference
 
-| Flag                     | Commands          | Description                                       | Default                                |
-| ------------------------ | ----------------- | ------------------------------------------------- | -------------------------------------- |
-| `--pool <name>`          | `grant`, `status` | Pool identifier (e.g. `agy/default/gemini`)       | Required for `grant`                   |
-| `--cap <n>`              | `grant`           | Maximum concurrent slots allowed                  | `1`                                    |
-| `--ttl <dur>`            | `grant`, `renew`  | Lease time-to-live (`30s`, `2m`, `1h`)            | `60s`                                  |
-| `--holder <id>`          | `grant`           | Explicit identifier for the lease holder          | Auto-generated host+pid                |
-| `--wait <dur>`           | `grant`           | Max time to wait/poll for capacity                | `0s` (immediate deferral)              |
-| `--retry-interval <dur>` | `grant`           | Polling interval when `--wait` is active          | `100ms`                                |
-| `--server <url>`         | All               | Remote HTTP authority URL (or `LEASE_AXI_SERVER`) | None (local file store)                |
-| `--store <path>`         | All               | Path to local store file (or `LEASE_AXI_STORE`)   | `~/.local/state/lease-axi/leases.json` |
-| `--json`                 | All               | Output structured JSON instead of TOON            | `false`                                |
-| `--bind <ip>`            | `serve`           | HTTP bind address (or `LEASE_AXI_BIND`)           | `127.0.0.1`                            |
-| `--port <p>`             | `serve`           | HTTP listen port (or `LEASE_AXI_PORT`)            | `7117`                                 |
+| Flag                     | Commands                  | Description                                                 | Default                                |
+| ------------------------ | ------------------------- | ----------------------------------------------------------- | -------------------------------------- |
+| `--pool <name>`          | `grant`, `status`         | Pool identifier (e.g. `agy/default/gemini`)                 | Required for `grant`                   |
+| `--cap <n>`              | `grant`                   | Maximum concurrent slots allowed                            | `1`                                    |
+| `--ttl <dur>`            | `grant`, `renew`          | Lease time-to-live (`30s`, `2m`, `1h`)                      | `60s`                                  |
+| `--holder <id>`          | `grant`                   | Explicit identifier for the lease holder                    | Auto-generated host+pid                |
+| `--wait <dur>`           | `grant`                   | Max time to wait/poll for capacity                          | `0s` (immediate deferral)              |
+| `--retry-interval <dur>` | `grant`                   | Polling interval when `--wait` is active                    | `100ms`                                |
+| `--task <text>`          | `grant`                   | Declare what the holder will run                            | None                                   |
+| `--expect-duration <d>`  | `grant`                   | Declare expected run time                                   | None                                   |
+| `--expect-size <text>`   | `grant`                   | Declare expected size                                       | None                                   |
+| `--config <path>`        | `grant`, `pools`, `serve` | Pool config file (or `LEASE_AXI_CONFIG`)                    | `~/.config/lease-axi/pools.json`       |
+| `--quota-file <path>`    | `pools`, `serve`          | Read quota-axi JSON from a file (or `LEASE_AXI_QUOTA_FILE`) | Runs `quota-axi --json`                |
+| `--server <url>`         | All                       | Remote HTTP authority URL (or `LEASE_AXI_SERVER`)           | None (local file store)                |
+| `--store <path>`         | All                       | Path to local store file (or `LEASE_AXI_STORE`)             | `~/.local/state/lease-axi/leases.json` |
+| `--json`                 | All                       | Output structured JSON instead of TOON                      | `false`                                |
+| `--bind <ip>`            | `serve`                   | HTTP bind address (or `LEASE_AXI_BIND`)                     | `127.0.0.1`                            |
+| `--port <p>`             | `serve`                   | HTTP listen port (or `LEASE_AXI_PORT`)                      | `7117`                                 |
 
 ---
 

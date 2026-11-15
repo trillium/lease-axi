@@ -9,11 +9,14 @@ import {
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { AxiError } from "axi-sdk-js";
+import { BUILTIN_CONFIG, type PoolConfig, resolvePoolRule } from "./config.js";
 import { withFileLock } from "./lock.js";
 import {
   type GrantRequest,
   type GrantResult,
   type ILeaseStore,
+  type ExpectedUsage,
   type Lease,
   type LeaseHolderInfo,
   type LeaseStoreState,
@@ -49,10 +52,12 @@ export function generateLeaseId(): string {
 export class FileLeaseStore implements ILeaseStore {
   readonly storePath: string;
   readonly lockPath: string;
+  readonly config: PoolConfig;
 
-  constructor(storePath?: string) {
+  constructor(storePath?: string, config: PoolConfig = BUILTIN_CONFIG) {
     this.storePath = storePath ?? getDefaultStorePath();
     this.lockPath = `${this.storePath}.lock`;
+    this.config = config;
   }
 
   private loadState(): LeaseStoreState {
@@ -101,7 +106,31 @@ export class FileLeaseStore implements ILeaseStore {
   }
 
   async grant(req: GrantRequest, explicitNow?: number): Promise<GrantResult> {
-    const cap = req.cap !== undefined && req.cap > 0 ? req.cap : 1;
+    const rule = resolvePoolRule(this.config, req.pool);
+    // A configured cap is the rule; a caller cannot raise it.
+    const cap =
+      rule.cap ?? (req.cap !== undefined && req.cap > 0 ? req.cap : 1);
+    const task = req.task?.trim() || undefined;
+    if (rule.requireTask && !task) {
+      throw new AxiError(
+        `Pool "${req.pool}" requires a declared task (--task)`,
+        "VALIDATION_ERROR",
+        ["Declare what you will run, e.g. --task 'refactor parser'"],
+      );
+    }
+    let expected: ExpectedUsage | undefined;
+    if (task || req.expectDuration || req.expectSize) {
+      expected = {};
+      if (task) expected.task = task;
+      if (req.expectDuration) {
+        try {
+          expected.durationSeconds = parseDurationSeconds(req.expectDuration);
+        } catch (err) {
+          throw new AxiError((err as Error).message, "VALIDATION_ERROR");
+        }
+      }
+      if (req.expectSize?.trim()) expected.size = req.expectSize.trim();
+    }
     const ttlSeconds = req.ttl ? parseDurationSeconds(req.ttl) : 60;
     const holder =
       req.holder && req.holder.trim() ? req.holder.trim() : defaultHolderId();
@@ -129,6 +158,7 @@ export class FileLeaseStore implements ILeaseStore {
             acquiredAt: new Date(nowMs).toISOString(),
             expiresAt: new Date(nowMs + ttlSeconds * 1000).toISOString(),
             ttlSeconds,
+            ...(expected ? { expected } : {}),
           };
           state.leases.push(lease);
           state.updatedAt = new Date(nowMs).toISOString();
@@ -156,6 +186,7 @@ export class FileLeaseStore implements ILeaseStore {
             holder: l.holder,
             expiresAt: l.expiresAt,
             remainingSeconds,
+            ...(l.expected?.task ? { task: l.expected.task } : {}),
           };
         });
 

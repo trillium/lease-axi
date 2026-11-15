@@ -1,5 +1,13 @@
 export const DEFERRAL_EXIT_CODE = 75;
 
+export type ExpectedUsage = {
+  task?: string;
+  /** Expected total run time of the work, in seconds. */
+  durationSeconds?: number;
+  /** Free-form size hint, e.g. small | medium | large or "~40 files". */
+  size?: string;
+};
+
 export type Lease = {
   id: string;
   pool: string;
@@ -8,6 +16,7 @@ export type Lease = {
   acquiredAt: string;
   expiresAt: string;
   ttlSeconds: number;
+  expected?: ExpectedUsage;
 };
 
 export type LeaseStoreState = {
@@ -21,6 +30,7 @@ export type LeaseHolderInfo = {
   holder: string;
   expiresAt: string;
   remainingSeconds: number;
+  task?: string;
 };
 
 export type GrantRequest = {
@@ -30,6 +40,10 @@ export type GrantRequest = {
   holder?: string;
   wait?: string | number;
   retryInterval?: string | number;
+  /** Declared usage: what the holder is about to do and how big it is. */
+  task?: string;
+  expectDuration?: string | number;
+  expectSize?: string;
 };
 
 export type GrantSuccess = {
@@ -76,6 +90,55 @@ export type PoolStatus = {
   pool: string;
   active: number;
   cap: number;
+};
+
+export type PoolWindowState = {
+  id: string;
+  kind?: string;
+  percentRemaining?: number;
+  resetsAt?: string;
+  started: boolean;
+};
+
+export type PoolQuota = {
+  /** Lowest percentRemaining across the pool's windows. */
+  percentRemaining?: number;
+  /** False when no window of the pool has been used yet. */
+  windowStarted: boolean;
+  /** Earliest reset time across the pool's windows. */
+  resetsAt?: string;
+  resetsInSeconds?: number;
+  windows: PoolWindowState[];
+};
+
+export type PoolIdleReason = "unstarted" | "near-expiry";
+
+export type PoolView = {
+  pool: string;
+  provider?: string;
+  account?: string;
+  scope?: string;
+  /** Effective cap, or null when the pool is uncapped by config. */
+  cap: number | null;
+  capSource: "config" | "lease" | "none";
+  active: number;
+  quota: PoolQuota | null;
+  /** Set only for config-managed pools that have no lease while their window sits unused. */
+  idle: PoolIdleReason | null;
+  holders: Array<{
+    id: string;
+    holder: string;
+    task?: string;
+    expectedSeconds?: number;
+    size?: string;
+    remainingSeconds: number;
+  }>;
+};
+
+export type PoolsResult = {
+  quota: { source: string; available: boolean; error?: string };
+  pools: PoolView[];
+  idle: string[];
 };
 
 export type StatusResult = {

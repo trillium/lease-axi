@@ -1,4 +1,6 @@
+import { AxiError } from "axi-sdk-js";
 import {
+  type PoolsResult,
   type GrantRequest,
   type GrantResult,
   type ILeaseStore,
@@ -42,6 +44,7 @@ export class HttpLeaseClient implements ILeaseStore {
     } catch {
       if (errorBody) msg = errorBody;
     }
+    if (res.status === 400) throw new AxiError(msg, "VALIDATION_ERROR");
     throw new Error(`Failed to grant lease from server: ${msg}`);
   }
 
@@ -111,5 +114,18 @@ export class HttpLeaseClient implements ILeaseStore {
       if (errorBody) msg = errorBody;
     }
     throw new Error(`Failed to fetch status from server: ${msg}`);
+  }
+
+  async pools(): Promise<PoolsResult> {
+    const res = await fetch(`${this.baseUrl}/pools`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 200) {
+      return (await res.json()) as PoolsResult;
+    }
+    throw new Error(
+      `Failed to fetch pools from server: HTTP ${res.status}: ${res.statusText}`,
+    );
   }
 }

@@ -21,6 +21,7 @@ Neutral pool lease CLI: grant, renew, and release concurrency slots with heartbe
 | `release`            | Free an acquired slot immediately                               | Exit `0` (idempotent)                  |
 | `status` (or `list`) | Inspect active pools, holders, and remaining lease TTLs         | Exit `0`                               |
 | `pools`              | Join quota-axi state, pool config and leases; flag idle pools   | Exit `0`                               |
+| `quota`              | Read the server's cached quota snapshot with its age            | Exit `0`; needs `--server`             |
 | `serve`              | Start HTTP authority service for network / tailnet coordination | Runs until stopped                     |
 
 ---
@@ -172,7 +173,19 @@ Each pool shows remaining percent, whether its window has started, when it reset
 - `unstarted`: its session window (or its only window) is still at 100% remaining, so the clock has not started; or
 - `near-expiry`: a window that still has unused quota resets within `idle.nearExpiryMinutes` (default 60), weekly windows included.
 
-Exhausted pools are never flagged. Quota comes from `quota-axi --json` (override the binary with `LEASE_AXI_QUOTA_BIN`, or a saved document with `--quota-file` / `LEASE_AXI_QUOTA_FILE`). If quota-axi is missing or fails, `pools` still prints leases and configured pools and sets `quota.available: false` with the error. `lease-axi serve` answers `GET /pools` using its own quota-axi, so every machine sees one table.
+Exhausted pools are never flagged. Quota comes from `quota-axi --json` (override the binary with `LEASE_AXI_QUOTA_BIN`, or a saved document with `--quota-file` / `LEASE_AXI_QUOTA_FILE`). If quota-axi is missing or fails, `pools` still prints leases and configured pools and sets `quota.available: false` with the error. `lease-axi serve` answers `GET /pools` from its cached quota snapshot, so every machine sees one table.
+
+### One quota source: `serve` caches, `quota` reads
+
+`lease-axi serve` is the only thing that runs quota-axi. It probes on an interval (`--quota-interval`, `LEASE_AXI_QUOTA_INTERVAL`, default `5m`), keeps the latest snapshot per pool with its age, and serves it at `GET /quota[?pool=<name>]` alongside `/pools` and `/status`. Neither endpoint probes per request. If a probe fails the last good snapshot is kept and the error is reported.
+
+```sh
+lease-axi quota --server http://authority:7117          # TOON
+lease-axi quota --server http://authority:7117 --json
+lease-axi quota --pool agy/default/argon
+```
+
+`quota` has no local probe path: without `--server` (or `LEASE_AXI_SERVER`) it exits `2`. Output shows `fetchedAt`, `age`, and `stale`; a snapshot older than `--quota-stale-after` (default 3 intervals) is marked `stale` with a warning, and a server that has never read quota-axi successfully reports `available: false`.
 
 ---
 
@@ -253,24 +266,26 @@ When deferred:
 
 ## Flags Reference
 
-| Flag                     | Commands                  | Description                                                 | Default                                |
-| ------------------------ | ------------------------- | ----------------------------------------------------------- | -------------------------------------- |
-| `--pool <name>`          | `grant`, `status`         | Pool identifier (e.g. `agy/default/gemini`)                 | Required for `grant`                   |
-| `--cap <n>`              | `grant`                   | Maximum concurrent slots allowed                            | `1`                                    |
-| `--ttl <dur>`            | `grant`, `renew`          | Lease time-to-live (`30s`, `2m`, `1h`)                      | `60s`                                  |
-| `--holder <id>`          | `grant`                   | Explicit identifier for the lease holder                    | Auto-generated host+pid                |
-| `--wait <dur>`           | `grant`                   | Max time to wait/poll for capacity                          | `0s` (immediate deferral)              |
-| `--retry-interval <dur>` | `grant`                   | Polling interval when `--wait` is active                    | `100ms`                                |
-| `--task <text>`          | `grant`                   | Declare what the holder will run                            | None                                   |
-| `--expect-duration <d>`  | `grant`                   | Declare expected run time                                   | None                                   |
-| `--expect-size <text>`   | `grant`                   | Declare expected size                                       | None                                   |
-| `--config <path>`        | `grant`, `pools`, `serve` | Pool config file (or `LEASE_AXI_CONFIG`)                    | `~/.config/lease-axi/pools.json`       |
-| `--quota-file <path>`    | `pools`, `serve`          | Read quota-axi JSON from a file (or `LEASE_AXI_QUOTA_FILE`) | Runs `quota-axi --json`                |
-| `--server <url>`         | All                       | Remote HTTP authority URL (or `LEASE_AXI_SERVER`)           | None (local file store)                |
-| `--store <path>`         | All                       | Path to local store file (or `LEASE_AXI_STORE`)             | `~/.local/state/lease-axi/leases.json` |
-| `--json`                 | All                       | Output structured JSON instead of TOON                      | `false`                                |
-| `--bind <ip>`            | `serve`                   | HTTP bind address (or `LEASE_AXI_BIND`)                     | `127.0.0.1`                            |
-| `--port <p>`             | `serve`                   | HTTP listen port (or `LEASE_AXI_PORT`)                      | `7117`                                 |
+| Flag                      | Commands                   | Description                                                      | Default                                |
+| ------------------------- | -------------------------- | ---------------------------------------------------------------- | -------------------------------------- |
+| `--pool <name>`           | `grant`, `status`, `quota` | Pool identifier (e.g. `agy/default/gemini`)                      | Required for `grant`                   |
+| `--cap <n>`               | `grant`                    | Maximum concurrent slots allowed                                 | `1`                                    |
+| `--ttl <dur>`             | `grant`, `renew`           | Lease time-to-live (`30s`, `2m`, `1h`)                           | `60s`                                  |
+| `--holder <id>`           | `grant`                    | Explicit identifier for the lease holder                         | Auto-generated host+pid                |
+| `--wait <dur>`            | `grant`                    | Max time to wait/poll for capacity                               | `0s` (immediate deferral)              |
+| `--retry-interval <dur>`  | `grant`                    | Polling interval when `--wait` is active                         | `100ms`                                |
+| `--task <text>`           | `grant`                    | Declare what the holder will run                                 | None                                   |
+| `--expect-duration <d>`   | `grant`                    | Declare expected run time                                        | None                                   |
+| `--expect-size <text>`    | `grant`                    | Declare expected size                                            | None                                   |
+| `--config <path>`         | `grant`, `pools`, `serve`  | Pool config file (or `LEASE_AXI_CONFIG`)                         | `~/.config/lease-axi/pools.json`       |
+| `--quota-file <path>`     | `pools`, `serve`           | Read quota-axi JSON from a file (or `LEASE_AXI_QUOTA_FILE`)      | Runs `quota-axi --json`                |
+| `--server <url>`          | All                        | Remote HTTP authority URL (or `LEASE_AXI_SERVER`)                | None (local file store)                |
+| `--store <path>`          | All                        | Path to local store file (or `LEASE_AXI_STORE`)                  | `~/.local/state/lease-axi/leases.json` |
+| `--json`                  | All                        | Output structured JSON instead of TOON                           | `false`                                |
+| `--quota-interval <d>`    | `serve`                    | Seconds-between quota-axi probes (or `LEASE_AXI_QUOTA_INTERVAL`) | `5m`                                   |
+| `--quota-stale-after <d>` | `serve`                    | Snapshot age beyond which `quota` marks it stale                 | 3 intervals                            |
+| `--bind <ip>`             | `serve`                    | HTTP bind address (or `LEASE_AXI_BIND`)                          | `127.0.0.1`                            |
+| `--port <p>`              | `serve`                    | HTTP listen port (or `LEASE_AXI_PORT`)                           | `7117`                                 |
 
 ---
 

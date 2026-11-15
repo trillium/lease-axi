@@ -3,6 +3,7 @@ import {
   type CommonFlags,
   parseGrantFlags,
   parsePoolsFlags,
+  parseQuotaFlags,
   parseReleaseFlags,
   parseRenewFlags,
   parseServeFlags,
@@ -15,6 +16,7 @@ import { resolveQuotaSource } from "./quota.js";
 import {
   renderGrant,
   renderPools,
+  renderQuota,
   renderRelease,
   renderRenew,
   renderStatus,
@@ -114,6 +116,25 @@ export async function poolsCommand(args: string[]): Promise<string> {
   return renderPools(result, flags.json);
 }
 
+/** Read the authority's cached snapshot. Deliberately has no local probe path. */
+export async function quotaCommand(args: string[]): Promise<string> {
+  const flags = parseQuotaFlags(args);
+  if (!flags.server) {
+    throw new AxiError(
+      "quota reads the cached snapshot of a lease-axi server and needs --server <url>",
+      "VALIDATION_ERROR",
+      [
+        "Pass --server http://authority:7117 or set LEASE_AXI_SERVER",
+        "To see local quota-axi state use `lease-axi pools`",
+      ],
+    );
+  }
+  return renderQuota(
+    await new HttpLeaseClient(flags.server).quota(flags.pool),
+    flags.json,
+  );
+}
+
 export async function serveCommand(args: string[]): Promise<string> {
   const flags = parseServeFlags(args);
   const storePath = flags.store ?? getDefaultStorePath();
@@ -124,6 +145,8 @@ export async function serveCommand(args: string[]): Promise<string> {
     storePath,
     config,
     quota: resolveQuotaSource(flags.quotaFile),
+    quotaIntervalSeconds: flags.quotaIntervalSeconds,
+    quotaStaleAfterSeconds: flags.quotaStaleAfterSeconds,
   });
 
   const info = {

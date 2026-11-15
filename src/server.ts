@@ -9,6 +9,7 @@ import { AxiError } from "axi-sdk-js";
 import { BUILTIN_CONFIG, type PoolConfig } from "./config.js";
 import { buildPoolsView } from "./pools.js";
 import { type QuotaSource, resolveQuotaSource } from "./quota.js";
+import { QuotaCache } from "./quota-cache.js";
 import { FileLeaseStore } from "./store.js";
 import {
   type GrantRequest,
@@ -70,6 +71,8 @@ function sendJson(
 export type LeaseServerOptions = {
   config?: PoolConfig;
   quota?: QuotaSource;
+  /** Shared snapshot cache; built from `quota` when omitted. */
+  quotaCache?: QuotaCache;
 };
 
 export function createLeaseServer(
@@ -77,110 +80,132 @@ export function createLeaseServer(
   options: LeaseServerOptions = {},
 ): Server {
   const config = options.config ?? BUILTIN_CONFIG;
-  const quota = options.quota ?? resolveQuotaSource();
-  return createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    try {
-      const url = new URL(
-        req.url ?? "/",
-        `http://${req.headers.host ?? "localhost"}`,
-      );
-      const pathname = url.pathname;
-      const method = req.method?.toUpperCase();
+  const cache =
+    options.quotaCache ?? new QuotaCache(options.quota ?? resolveQuotaSource());
+  const quota = cache.asSource();
+  const server = createServer(
+    async (req: IncomingMessage, res: ServerResponse) => {
+      try {
+        const url = new URL(
+          req.url ?? "/",
+          `http://${req.headers.host ?? "localhost"}`,
+        );
+        const pathname = url.pathname;
+        const method = req.method?.toUpperCase();
 
-      if (method === "GET" && pathname === "/health") {
-        sendJson(res, 200, {
-          status: "ok",
-          uptime: process.uptime(),
-          version: VERSION,
+        if (method === "GET" && pathname === "/health") {
+          sendJson(res, 200, {
+            status: "ok",
+            uptime: process.uptime(),
+            version: VERSION,
+          });
+          return;
+        }
+
+        if (
+          method === "GET" &&
+          (pathname === "/status" || pathname === "/list")
+        ) {
+          const pool = url.searchParams.get("pool") ?? undefined;
+          const result = await store.status(pool);
+          sendJson(res, 200, result);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/pools") {
+          const status = await store.status();
+          const view = await buildPoolsView(status, quota, config);
+          const snap = await cache.get();
+          sendJson(res, 200, {
+            ...view,
+            quota: {
+              ...view.quota,
+              fetchedAt: snap.fetchedAt,
+              ageSeconds: snap.ageSeconds,
+              stale: snap.stale,
+            },
+          });
+          return;
+        }
+
+        if (method === "GET" && pathname === "/quota") {
+          const pool = url.searchParams.get("pool") ?? undefined;
+          sendJson(res, 200, await cache.get(pool));
+          return;
+        }
+
+        if (method === "POST" && pathname === "/grant") {
+          const body = await readJsonBody<GrantRequest>(req);
+          if (!body.pool || typeof body.pool !== "string") {
+            sendJson(res, 400, {
+              error: "VALIDATION_ERROR",
+              message: "Missing or invalid required field 'pool'",
+            });
+            return;
+          }
+          const result = await store.grant(body);
+          if (result.granted) {
+            sendJson(res, 200, result);
+          } else {
+            // HTTP 429 Too Many Requests corresponds to pool capacity deferral
+            sendJson(res, 429, result);
+          }
+          return;
+        }
+
+        if (method === "POST" && pathname === "/renew") {
+          const body = await readJsonBody<RenewRequest>(req);
+          if (!body.id || typeof body.id !== "string") {
+            sendJson(res, 400, {
+              error: "VALIDATION_ERROR",
+              message: "Missing or invalid required field 'id'",
+            });
+            return;
+          }
+          try {
+            const result = await store.renew(body);
+            sendJson(res, 200, result);
+          } catch (err) {
+            sendJson(res, 404, {
+              error: "LEASE_NOT_FOUND",
+              message: (err as Error).message,
+            });
+          }
+          return;
+        }
+
+        if (method === "POST" && pathname === "/release") {
+          const body = await readJsonBody<ReleaseRequest>(req);
+          if (!body.id || typeof body.id !== "string") {
+            sendJson(res, 400, {
+              error: "VALIDATION_ERROR",
+              message: "Missing or invalid required field 'id'",
+            });
+            return;
+          }
+          const result = await store.release(body);
+          sendJson(res, 200, result);
+          return;
+        }
+
+        sendJson(res, 404, {
+          error: "NOT_FOUND",
+          message: `Unknown endpoint ${method} ${pathname}`,
         });
-        return;
-      }
-
-      if (
-        method === "GET" &&
-        (pathname === "/status" || pathname === "/list")
-      ) {
-        const pool = url.searchParams.get("pool") ?? undefined;
-        const result = await store.status(pool);
-        sendJson(res, 200, result);
-        return;
-      }
-
-      if (method === "GET" && pathname === "/pools") {
-        const status = await store.status();
-        sendJson(res, 200, await buildPoolsView(status, quota, config));
-        return;
-      }
-
-      if (method === "POST" && pathname === "/grant") {
-        const body = await readJsonBody<GrantRequest>(req);
-        if (!body.pool || typeof body.pool !== "string") {
-          sendJson(res, 400, {
-            error: "VALIDATION_ERROR",
-            message: "Missing or invalid required field 'pool'",
-          });
+      } catch (err) {
+        if (err instanceof AxiError && err.code === "VALIDATION_ERROR") {
+          sendJson(res, 400, { error: err.code, message: err.message });
           return;
         }
-        const result = await store.grant(body);
-        if (result.granted) {
-          sendJson(res, 200, result);
-        } else {
-          // HTTP 429 Too Many Requests corresponds to pool capacity deferral
-          sendJson(res, 429, result);
-        }
-        return;
+        sendJson(res, 500, {
+          error: "INTERNAL_ERROR",
+          message: (err as Error).message,
+        });
       }
-
-      if (method === "POST" && pathname === "/renew") {
-        const body = await readJsonBody<RenewRequest>(req);
-        if (!body.id || typeof body.id !== "string") {
-          sendJson(res, 400, {
-            error: "VALIDATION_ERROR",
-            message: "Missing or invalid required field 'id'",
-          });
-          return;
-        }
-        try {
-          const result = await store.renew(body);
-          sendJson(res, 200, result);
-        } catch (err) {
-          sendJson(res, 404, {
-            error: "LEASE_NOT_FOUND",
-            message: (err as Error).message,
-          });
-        }
-        return;
-      }
-
-      if (method === "POST" && pathname === "/release") {
-        const body = await readJsonBody<ReleaseRequest>(req);
-        if (!body.id || typeof body.id !== "string") {
-          sendJson(res, 400, {
-            error: "VALIDATION_ERROR",
-            message: "Missing or invalid required field 'id'",
-          });
-          return;
-        }
-        const result = await store.release(body);
-        sendJson(res, 200, result);
-        return;
-      }
-
-      sendJson(res, 404, {
-        error: "NOT_FOUND",
-        message: `Unknown endpoint ${method} ${pathname}`,
-      });
-    } catch (err) {
-      if (err instanceof AxiError && err.code === "VALIDATION_ERROR") {
-        sendJson(res, 400, { error: err.code, message: err.message });
-        return;
-      }
-      sendJson(res, 500, {
-        error: "INTERNAL_ERROR",
-        message: (err as Error).message,
-      });
-    }
-  });
+    },
+  );
+  server.on("close", () => cache.stop());
+  return server;
 }
 
 export type ServerOptions = {
@@ -190,6 +215,10 @@ export type ServerOptions = {
   storePath?: string;
   config?: PoolConfig;
   quota?: QuotaSource;
+  /** Seconds between quota probes. Default 300. */
+  quotaIntervalSeconds?: number;
+  /** Seconds before a snapshot is flagged stale. Default 3 intervals. */
+  quotaStaleAfterSeconds?: number;
 };
 
 export type RunningServer = {
@@ -210,7 +239,11 @@ export async function startServer(
   const config = options.config ?? BUILTIN_CONFIG;
   const store = options.store ?? new FileLeaseStore(options.storePath, config);
 
-  const server = createLeaseServer(store, { config, quota: options.quota });
+  const quotaCache = new QuotaCache(options.quota ?? resolveQuotaSource(), {
+    intervalSeconds: options.quotaIntervalSeconds,
+    staleAfterSeconds: options.quotaStaleAfterSeconds,
+  });
+  const server = createLeaseServer(store, { config, quotaCache });
 
   return new Promise<RunningServer>((resolve, reject) => {
     server.on("error", (err) => {
@@ -218,6 +251,7 @@ export async function startServer(
     });
 
     server.listen(port, bind, () => {
+      quotaCache.start();
       const addr = server.address() as AddressInfo;
       const actualPort = addr.port;
       const actualHost =

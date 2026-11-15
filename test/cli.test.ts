@@ -54,7 +54,9 @@ describe("CLI entrypoint and flag routing", () => {
       stdout: { write: (c) => (out += c) },
     });
     expect(out).toContain("usage: lease-axi");
-    expect(out).toContain("grant, renew, release, status (list), pools, serve");
+    expect(out).toContain(
+      "grant, renew, release, status (list), pools, quota, serve",
+    );
     expect(process.exitCode ?? 0).toBe(0);
   });
 

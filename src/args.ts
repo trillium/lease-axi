@@ -1,4 +1,5 @@
 import { AxiError } from "axi-sdk-js";
+import { parseDurationSeconds } from "./types.js";
 
 export type CommonFlags = {
   server?: string;
@@ -40,6 +41,12 @@ export type ServeFlags = CommonFlags & {
   bind: string;
   port: number;
   quotaFile?: string;
+  quotaIntervalSeconds?: number;
+  quotaStaleAfterSeconds?: number;
+};
+
+export type QuotaFlags = CommonFlags & {
+  pool?: string;
 };
 
 /** Consume `--name value` or `--name=value`; returns the value and new index, or undefined. */
@@ -318,6 +325,41 @@ export function parseStatusFlags(args: string[]): StatusFlags {
   };
 }
 
+function durationFlag(name: string, value: string): number {
+  try {
+    return parseDurationSeconds(value);
+  } catch {
+    throw new AxiError(
+      `Invalid ${name}: "${value}". Use a duration like 30s, 5m or 1h`,
+      "VALIDATION_ERROR",
+    );
+  }
+}
+
+export function parseQuotaFlags(args: string[]): QuotaFlags {
+  let server: string | undefined = process.env.LEASE_AXI_SERVER;
+  let pool: string | undefined;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const hit = takeValue(args, i, "--server") ?? takeValue(args, i, "--pool");
+    if (hit) {
+      if (arg.split("=")[0] === "--server") server = hit.value;
+      else pool = hit.value;
+      i = hit.next;
+    } else if (arg === "--json") {
+      json = true;
+    } else {
+      throw new AxiError(
+        `Unknown flag or argument: ${arg}`,
+        "VALIDATION_ERROR",
+        ["Run `lease-axi quota --help` for usage details"],
+      );
+    }
+  }
+  return { server, pool, json };
+}
+
 export function parseServeFlags(args: string[]): ServeFlags {
   let bind = process.env.LEASE_AXI_BIND ?? "127.0.0.1";
   let port = process.env.LEASE_AXI_PORT
@@ -326,15 +368,30 @@ export function parseServeFlags(args: string[]): ServeFlags {
   let store: string | undefined = process.env.LEASE_AXI_STORE;
   let config: string | undefined;
   let quotaFile: string | undefined;
+  let quotaIntervalSeconds: number | undefined = process.env
+    .LEASE_AXI_QUOTA_INTERVAL
+    ? durationFlag(
+        "LEASE_AXI_QUOTA_INTERVAL",
+        process.env.LEASE_AXI_QUOTA_INTERVAL,
+      )
+    : undefined;
+  let quotaStaleAfterSeconds: number | undefined;
   let json = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const hit =
-      takeValue(args, i, "--config") ?? takeValue(args, i, "--quota-file");
+      takeValue(args, i, "--config") ??
+      takeValue(args, i, "--quota-file") ??
+      takeValue(args, i, "--quota-interval") ??
+      takeValue(args, i, "--quota-stale-after");
     if (hit) {
-      if (arg.split("=")[0] === "--config") config = hit.value;
-      else quotaFile = hit.value;
+      const name = arg.split("=")[0];
+      if (name === "--config") config = hit.value;
+      else if (name === "--quota-file") quotaFile = hit.value;
+      else if (name === "--quota-interval")
+        quotaIntervalSeconds = durationFlag(name, hit.value);
+      else quotaStaleAfterSeconds = durationFlag(name, hit.value);
       i = hit.next;
       continue;
     }
@@ -381,6 +438,8 @@ export function parseServeFlags(args: string[]): ServeFlags {
     store,
     config,
     quotaFile,
+    quotaIntervalSeconds,
+    quotaStaleAfterSeconds,
     json,
   };
 }

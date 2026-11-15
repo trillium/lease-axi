@@ -4,6 +4,7 @@ import {
   type GrantResult,
   type GrantSuccess,
   type PoolsResult,
+  type QuotaResult,
   type ReleaseResult,
   type RenewResult,
   type StatusResult,
@@ -145,6 +146,61 @@ export function renderPools(result: PoolsResult, json: boolean): string {
     blocks.push(
       encode({
         warning: `idle pools with no lease: ${result.idle.join(", ")}`,
+      }),
+    );
+  }
+  return blocks.filter(Boolean).join("\n");
+}
+
+export function renderQuota(result: QuotaResult, json: boolean): string {
+  if (json) {
+    return JSON.stringify(result, null, 2);
+  }
+  const nowMs = Date.now();
+  const blocks: string[] = [
+    encode({
+      snapshot: {
+        source: result.source,
+        available: result.available,
+        fetchedAt: result.fetchedAt ?? "-",
+        age:
+          result.ageSeconds !== null
+            ? formatDurationSeconds(result.ageSeconds)
+            : "-",
+        stale: result.stale,
+        refreshEvery: formatDurationSeconds(result.intervalSeconds),
+        staleAfter: formatDurationSeconds(result.staleAfterSeconds),
+        ...(result.error ? { error: result.error } : {}),
+      },
+    }),
+    encode({
+      pools: result.pools.map((p) => {
+        const remaining = p.windows
+          .map((w) => w.percentRemaining)
+          .filter((v): v is number => v !== undefined);
+        const resets = p.windows
+          .map((w) => (w.resetsAt ? Date.parse(w.resetsAt) : Number.NaN))
+          .filter((v) => Number.isFinite(v));
+        return {
+          pool: p.pool,
+          remainingPercent: remaining.length > 0 ? Math.min(...remaining) : "-",
+          resetsIn:
+            resets.length > 0
+              ? formatDurationSeconds(
+                  Math.max(0, Math.round((Math.min(...resets) - nowMs) / 1000)),
+                )
+              : "-",
+        };
+      }),
+    }),
+  ];
+  if (result.stale) {
+    blocks.push(
+      encode({
+        warning:
+          result.ageSeconds === null
+            ? "no quota snapshot yet; the server has not read quota-axi successfully"
+            : `quota snapshot is stale (${formatDurationSeconds(result.ageSeconds)} old, limit ${formatDurationSeconds(result.staleAfterSeconds)}); treat remaining percentages as unreliable`,
       }),
     );
   }

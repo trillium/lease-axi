@@ -1,6 +1,7 @@
 import { AxiError } from "axi-sdk-js";
 import {
   type PoolsResult,
+  type QuotaResult,
   type GrantRequest,
   type GrantResult,
   type ILeaseStore,
@@ -126,6 +127,23 @@ export class HttpLeaseClient implements ILeaseStore {
     }
     throw new Error(
       `Failed to fetch pools from server: HTTP ${res.status}: ${res.statusText}`,
+    );
+  }
+
+  /** Read the authority's cached quota snapshot. Never probes providers. */
+  async quota(pool?: string): Promise<QuotaResult> {
+    const target = pool
+      ? `${this.baseUrl}/quota?pool=${encodeURIComponent(pool)}`
+      : `${this.baseUrl}/quota`;
+    const res = await fetch(target, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 200) {
+      return (await res.json()) as QuotaResult;
+    }
+    throw new Error(
+      `Failed to fetch quota from server: HTTP ${res.status}: ${res.statusText}`,
     );
   }
 }

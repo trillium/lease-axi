@@ -136,9 +136,37 @@ export type PoolView = {
 };
 
 export type PoolsResult = {
-  quota: { source: string; available: boolean; error?: string };
+  quota: {
+    source: string;
+    available: boolean;
+    error?: string;
+    fetchedAt?: string | null;
+    ageSeconds?: number | null;
+    stale?: boolean;
+  };
   pools: PoolView[];
   idle: string[];
+};
+
+/** Cached quota snapshot served by the authority. Readers never probe providers. */
+export type QuotaResult = {
+  source: string;
+  /** False until one probe has succeeded. */
+  available: boolean;
+  fetchedAt: string | null;
+  ageSeconds: number | null;
+  stale: boolean;
+  intervalSeconds: number;
+  staleAfterSeconds: number;
+  /** Last probe error; the previous good snapshot is still served. */
+  error?: string;
+  pools: Array<{
+    pool: string;
+    provider: string;
+    account: string;
+    scope: string;
+    windows: PoolWindowState[];
+  }>;
 };
 
 export type StatusResult = {

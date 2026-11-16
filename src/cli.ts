@@ -3,6 +3,7 @@ import { AxiError, exitCodeForError, runAxiCli } from "axi-sdk-js";
 import {
   DeferralError,
   grantCommand,
+  machinesCommand,
   type LeaseContext,
   poolsCommand,
   quotaCommand,
@@ -36,8 +37,8 @@ export const DESCRIPTION =
   "Agent ergonomic pool lease CLI: grant, renew and release concurrency slots with heartbeat expiry";
 
 export const TOP_HELP = `usage: lease-axi <command> [flags]
-commands[7]:
-  grant, renew, release, status (list), pools, quota, serve
+commands[8]:
+  grant, renew, release, status (list), pools, quota, machines, serve
 output:
   Default TOON reports compact agent-ergonomic state. Pass --json for structured JSON output.
   When a pool is at capacity, grant defers the caller and exits with status 75 (EX_TEMPFAIL).
@@ -48,9 +49,10 @@ verbs:
   status: Inspect active pools, holder leases, and remaining TTLs (alias: list)
   pools: Join quota-axi state with pool config and leases; flag idle pools (unstarted or near reset, no lease)
   quota: Read the server's cached quota snapshot with its age (stale flagged); never probes providers
+  machines: Rank machines by beszel load against per-machine limits; refuse over-limit machines (exit 75 when none eligible)
   serve: Run lightweight HTTP authority server for tailnet / cross-machine lease coordination
-flags[16]:
-  --pool <name>, --cap <n>, --ttl <duration>, --holder <id>, --wait <duration>, --retry-interval <duration>, --task <text>, --expect-duration <duration>, --expect-size <text>, --config <path>, --quota-file <path>, --quota-interval <duration>, --quota-stale-after <duration>, --server <url>, --store <path>, --json
+flags[18]:
+  --pool <name>, --cap <n>, --ttl <duration>, --holder <id>, --wait <duration>, --retry-interval <duration>, --task <text>, --expect-duration <duration>, --expect-size <text>, --config <path>, --quota-file <path>, --quota-interval <duration>, --quota-stale-after <duration>, --machine <names>, --beszel-file <path>, --server <url>, --store <path>, --json
 examples:
   lease-axi grant --pool agy/default/gemini --cap 1 --ttl 60s
   lease-axi grant --pool agy/default/gemini --cap 1 --wait 30s
@@ -58,6 +60,8 @@ examples:
   lease-axi release lease_01h7abc123
   lease-axi grant --pool agy/default/argon --holder worker-1 --task "refactor parser" --expect-duration 20m --expect-size medium
   lease-axi pools
+  lease-axi machines
+  lease-axi machines --machine mini0,mini1 --json
   lease-axi quota --server http://authority:7117
   lease-axi status
   lease-axi status --pool agy/default/gemini
@@ -97,6 +101,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
       status: statusCommand,
       pools: poolsCommand,
       quota: quotaCommand,
+      machines: machinesCommand,
       list: statusCommand,
       serve: serveCommand,
     },

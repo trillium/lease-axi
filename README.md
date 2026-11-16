@@ -14,15 +14,16 @@ Neutral pool lease CLI: grant, renew, and release concurrency slots with heartbe
 
 ## Verbs and Commands
 
-| Verb                 | Purpose                                                         | Exit on Full / Error                   |
-| -------------------- | --------------------------------------------------------------- | -------------------------------------- |
-| `grant`              | Acquire a slot in a named pool with `--cap` and `--ttl`         | Exit `75` if full; exit `0` on success |
-| `renew`              | Heartbeat to extend a lease's expiration deadline               | Exit `1` if expired / not found        |
-| `release`            | Free an acquired slot immediately                               | Exit `0` (idempotent)                  |
-| `status` (or `list`) | Inspect active pools, holders, and remaining lease TTLs         | Exit `0`                               |
-| `pools`              | Join quota-axi state, pool config and leases; flag idle pools   | Exit `0`                               |
-| `quota`              | Read the server's cached quota snapshot with its age            | Exit `0`; needs `--server`             |
-| `serve`              | Start HTTP authority service for network / tailnet coordination | Runs until stopped                     |
+| Verb                 | Purpose                                                         | Exit on Full / Error                                  |
+| -------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
+| `grant`              | Acquire a slot in a named pool with `--cap` and `--ttl`         | Exit `75` if full; exit `0` on success                |
+| `renew`              | Heartbeat to extend a lease's expiration deadline               | Exit `1` if expired / not found                       |
+| `release`            | Free an acquired slot immediately                               | Exit `0` (idempotent)                                 |
+| `status` (or `list`) | Inspect active pools, holders, and remaining lease TTLs         | Exit `0`                                              |
+| `pools`              | Join quota-axi state, pool config and leases; flag idle pools   | Exit `0`                                              |
+| `quota`              | Read the server's cached quota snapshot with its age            | Exit `0`; needs `--server`                            |
+| `machines`           | Rank machines by beszel load; refuse over-limit machines        | Exit `75` if none eligible; `1` if beszel unreachable |
+| `serve`              | Start HTTP authority service for network / tailnet coordination | Runs until stopped                                    |
 
 ---
 
@@ -186,6 +187,37 @@ lease-axi quota --pool agy/default/argon
 ```
 
 `quota` has no local probe path: without `--server` (or `LEASE_AXI_SERVER`) it exits `2`. Output shows `fetchedAt`, `age`, and `stale`; a snapshot older than `--quota-stale-after` (default 3 intervals) is marked `stale` with a warning, and a server that has never read quota-axi successfully reports `available: false`.
+
+---
+
+## Machine load and spread
+
+`lease-axi machines` reads current load from [beszel](https://beszel.dev) (`beszel hosts --json`, reached over the tailnet) and returns machines in the order work should go to them. It is read-only: it holds no lease, and `fm-spawn`/`fm-send` are not yet wired to call it.
+
+Limits and policy live in the same config file as the pool rules (`--config`, `LEASE_AXI_CONFIG`, else `~/.config/lease-axi/pools.json`):
+
+```json
+{
+  "machines": {
+    "*": { "maxLoadPerCore": 1.5 },
+    "mini0": { "maxLoadPerCore": 1.0 },
+    "lnx-server": { "maxLoad": 6 }
+  },
+  "spread": "least-loaded"
+}
+```
+
+- Keys under `machines` are beszel host names; `*` is the default rule for any host without its own. Limits compare against the host's 1-minute load: `maxLoad` is absolute, `maxLoadPerCore` is load divided by CPU cores. If both are set, both must hold. Built-in default: `"*": { "maxLoadPerCore": 1.5 }`.
+- Candidates are the machines named in config (not `*`); with none named, every host beszel reports. `--machine a,b` narrows to those.
+- `spread`: `least-loaded` (default) orders eligible machines by load per core, lowest first; `config-order` keeps the order of the `machines` keys.
+- A machine is **refused**, with a reason, when it is down, missing from beszel, over a limit, or lacks the data (load, cores) a limit needs. Nothing is guessed.
+
+```sh
+lease-axi machines
+lease-axi machines --machine mini0,mini1 --json
+```
+
+Exit `0` when at least one machine is eligible, `75` when none is (the same deferral code as `grant`). If beszel cannot be read (binary missing, hub or tailnet unreachable) the command exits `1` with `BESZEL_UNAVAILABLE` and the beszel message. Override the binary with `LEASE_AXI_BESZEL_BIN`, or read a saved `beszel hosts --json` document with `--beszel-file` / `LEASE_AXI_BESZEL_FILE`.
 
 ---
 

@@ -45,6 +45,13 @@ export type ServeFlags = CommonFlags & {
   quotaStaleAfterSeconds?: number;
 };
 
+export type MachinesFlags = {
+  config?: string;
+  beszelFile?: string;
+  machines: string[];
+  json: boolean;
+};
+
 export type QuotaFlags = CommonFlags & {
   pool?: string;
 };
@@ -477,4 +484,34 @@ export function parsePoolsFlags(args: string[]): PoolsFlags {
   }
 
   return { server, store, config, quotaFile, json };
+}
+
+export function parseMachinesFlags(args: string[]): MachinesFlags {
+  let config: string | undefined;
+  let beszelFile: string | undefined;
+  const machines: string[] = [];
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const hit =
+      takeValue(args, i, "--config") ??
+      takeValue(args, i, "--beszel-file") ??
+      takeValue(args, i, "--machine");
+    if (hit) {
+      const name = arg.split("=")[0];
+      if (name === "--config") config = hit.value;
+      else if (name === "--beszel-file") beszelFile = hit.value;
+      else machines.push(...hit.value.split(",").filter(Boolean));
+      i = hit.next;
+    } else if (arg === "--json") {
+      json = true;
+    } else {
+      throw new AxiError(
+        `Unknown flag or argument: ${arg}`,
+        "VALIDATION_ERROR",
+        ["Run `lease-axi machines --help` for usage details"],
+      );
+    }
+  }
+  return { config, beszelFile, machines, json };
 }

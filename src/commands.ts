@@ -2,6 +2,7 @@ import { AxiError } from "axi-sdk-js";
 import {
   type CommonFlags,
   parseGrantFlags,
+  parseMachinesFlags,
   parsePoolsFlags,
   parseQuotaFlags,
   parseReleaseFlags,
@@ -11,10 +12,12 @@ import {
 } from "./args.js";
 import { HttpLeaseClient } from "./client.js";
 import { loadPoolConfig } from "./config.js";
+import { evaluateMachines, resolveLoadSource } from "./machines.js";
 import { buildPoolsView } from "./pools.js";
 import { resolveQuotaSource } from "./quota.js";
 import {
   renderGrant,
+  renderMachines,
   renderPools,
   renderQuota,
   renderRelease,
@@ -174,4 +177,35 @@ export async function serveCommand(args: string[]): Promise<string> {
   });
 
   return "";
+}
+
+/**
+ * Rank machines by current beszel load. Exits 75 (deferral) when no machine is
+ * eligible; exits 1 with BESZEL_UNAVAILABLE when load cannot be read at all.
+ */
+export async function machinesCommand(args: string[]): Promise<string> {
+  const flags = parseMachinesFlags(args);
+  const config = loadPoolConfig(flags.config);
+  const source = resolveLoadSource(flags.beszelFile);
+  let hosts;
+  try {
+    hosts = await source.read();
+  } catch (err) {
+    throw new AxiError(
+      `Cannot read machine load from beszel (${source.describe}): ${(err as Error).message}`,
+      "BESZEL_UNAVAILABLE",
+      [
+        "Load is not guessed; check the tailnet and BESZEL_URL, or run `beszel hosts` directly",
+        "Pass --beszel-file <path> to use a saved `beszel hosts --json` document",
+      ],
+    );
+  }
+  const result = evaluateMachines(
+    hosts,
+    config,
+    source.describe,
+    flags.machines,
+  );
+  if (result.eligible.length === 0) process.exitCode = 75;
+  return renderMachines(result, flags.json);
 }

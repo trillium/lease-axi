@@ -15,7 +15,23 @@ export type IdleRule = {
   nearExpiryMinutes: number;
 };
 
-export type PoolConfig = {
+export type MachineRule = {
+  /** Refuse the machine when its 1-minute load average exceeds this. */
+  maxLoad?: number;
+  /** Refuse the machine when 1-minute load divided by CPU cores exceeds this. */
+  maxLoadPerCore?: number;
+};
+
+export type SpreadPolicy = "least-loaded" | "config-order";
+
+export type MachinesConfig = {
+  /** Rules keyed by beszel host name. The "*" key applies to any host without its own rule. */
+  machines: Record<string, MachineRule>;
+  /** How eligible machines are ordered. */
+  spread: SpreadPolicy;
+};
+
+export type PoolConfig = MachinesConfig & {
   /** Rules keyed by provider (first segment of the pool name). */
   providers: Record<string, PoolRule>;
   /** Rules keyed by the full pool name; they win over provider rules. */
@@ -27,6 +43,8 @@ export const BUILTIN_CONFIG: PoolConfig = {
   providers: { agy: { cap: 1 }, codex: { cap: 1 }, "opencode-go": { cap: 1 } },
   pools: {},
   idle: { nearExpiryMinutes: 60 },
+  machines: { "*": { maxLoadPerCore: 1.5 } },
+  spread: "least-loaded",
 };
 
 export function getDefaultConfigPath(): string {
@@ -83,6 +101,54 @@ function validateRules(
   return out;
 }
 
+function positive(where: string, v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+    throw new AxiError(
+      `Config ${where} must be a positive number`,
+      "VALIDATION_ERROR",
+    );
+  }
+  return v;
+}
+
+function validateMachines(doc: unknown): Record<string, MachineRule> {
+  if (doc === undefined) return { ...BUILTIN_CONFIG.machines };
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+    throw new AxiError("Config machines must be an object", "VALIDATION_ERROR");
+  }
+  const out: Record<string, MachineRule> = {};
+  for (const [name, rule] of Object.entries(doc)) {
+    if (typeof rule !== "object" || rule === null || Array.isArray(rule)) {
+      throw new AxiError(
+        `Config machines.${name} must be an object`,
+        "VALIDATION_ERROR",
+      );
+    }
+    const raw = rule as Record<string, unknown>;
+    const parsed: MachineRule = {};
+    if (raw.maxLoad !== undefined) {
+      parsed.maxLoad = positive(`machines.${name}.maxLoad`, raw.maxLoad);
+    }
+    if (raw.maxLoadPerCore !== undefined) {
+      parsed.maxLoadPerCore = positive(
+        `machines.${name}.maxLoadPerCore`,
+        raw.maxLoadPerCore,
+      );
+    }
+    out[name] = parsed;
+  }
+  return out;
+}
+
+function validateSpread(v: unknown): SpreadPolicy {
+  if (v === undefined) return BUILTIN_CONFIG.spread;
+  if (v === "least-loaded" || v === "config-order") return v;
+  throw new AxiError(
+    'Config spread must be "least-loaded" or "config-order"',
+    "VALIDATION_ERROR",
+  );
+}
+
 /** Merge a parsed config document over the built-in defaults. */
 export function parsePoolConfig(doc: unknown): PoolConfig {
   if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
@@ -108,7 +174,13 @@ export function parsePoolConfig(doc: unknown): PoolConfig {
       nearExpiryMinutes = v;
     }
   }
-  return { providers, pools, idle: { nearExpiryMinutes } };
+  return {
+    providers,
+    pools,
+    idle: { nearExpiryMinutes },
+    machines: validateMachines(raw.machines),
+    spread: validateSpread(raw.spread),
+  };
 }
 
 /**

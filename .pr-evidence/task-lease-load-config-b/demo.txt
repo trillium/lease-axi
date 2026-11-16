@@ -1,0 +1,25 @@
+$ lease-axi machines   # live beszel
+machines:
+  source: "cmd:beszel hosts --json"
+  policy: least-loaded
+  best: vps156900-eu9
+eligible[7]{machine,load1,cores,loadPerCore,limit}:
+  vps156900-eu9,0,1,0,perCore<=1.5
+  server1,0.12,24,0.01,perCore<=1.5
+  m1studio1,1.47,10,0.15,perCore<=1.5
+  m2mini0,1.75,8,0.22,perCore<=1.5
+  mini1,2.85,10,0.29,perCore<=1.5
+  lnx-server,1.41,4,0.35,perCore<=1.5
+  mini0,5.45,10,0.55,perCore<=1.5
+refused[3]{machine,load1,cores,loadPerCore,limit,reason}:
+  macbookpro,27.43,10,2.74,perCore<=1.5,load per core 2.74 exceeds maxLoadPerCore 1.5
+  melanie,1,10,0.1,perCore<=1.5,host is down
+  mini3,58.1,8,7.26,perCore<=1.5,host is down
+[exit 0]
+
+$ BESZEL_URL=http://127.0.0.1:1 lease-axi machines   # hub unreachable
+error:
+  code: BESZEL_UNAVAILABLE
+  message: "Cannot read machine load from beszel (cmd:beszel hosts --json): beszel: hub unreachable at http://127.0.0.1:1 (down, or tailscale not connected)"
+suggestions[2]: "Load is not guessed; check the tailnet and BESZEL_URL, or run `beszel hosts` directly",Pass --beszel-file <path> to use a saved `beszel hosts --json` document
+[exit 1]

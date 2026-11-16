@@ -1,4 +1,5 @@
 import { encode } from "@toon-format/toon";
+import type { MachinesResult } from "./machines.js";
 import {
   type GrantDeferred,
   type GrantResult,
@@ -205,4 +206,45 @@ export function renderQuota(result: QuotaResult, json: boolean): string {
     );
   }
   return blocks.filter(Boolean).join("\n");
+}
+
+export function renderMachines(result: MachinesResult, json: boolean): string {
+  if (json) return JSON.stringify(result, null, 2);
+  const limitText = (m: MachinesResult["eligible"][number]) =>
+    [
+      m.limit.maxLoad !== undefined ? `load<=${m.limit.maxLoad}` : "",
+      m.limit.maxLoadPerCore !== undefined
+        ? `perCore<=${m.limit.maxLoadPerCore}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ") || "-";
+  const row = (m: MachinesResult["eligible"][number]) => ({
+    machine: m.machine,
+    load1: m.load1 ?? "-",
+    cores: m.cores ?? "-",
+    loadPerCore: m.loadPerCore ?? "-",
+    limit: limitText(m),
+  });
+  const blocks = [
+    encode({
+      machines: {
+        source: result.source,
+        policy: result.policy,
+        best: result.eligible[0]?.machine ?? "none",
+      },
+    }),
+    encode({ eligible: result.eligible.map(row) }),
+  ];
+  if (result.refused.length > 0) {
+    blocks.push(
+      encode({
+        refused: result.refused.map((m) => ({ ...row(m), reason: m.reason })),
+      }),
+    );
+  }
+  if (result.eligible.length === 0) {
+    blocks.push(encode({ warning: "no machine is under its load limit" }));
+  }
+  return blocks.join("\n");
 }

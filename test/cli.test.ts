@@ -55,7 +55,7 @@ describe("CLI entrypoint and flag routing", () => {
     });
     expect(out).toContain("usage: lease-axi");
     expect(out).toContain(
-      "grant, renew, release, status (list), pools, quota, serve",
+      "grant, renew, release, status (list), pools, quota, machines, serve",
     );
     expect(process.exitCode ?? 0).toBe(0);
   });
